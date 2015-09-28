@@ -156,13 +156,17 @@ public class Client {
     return refCount==0;
   }
 
+  /**
+   * 用于封装Invocation对象 即发送给server 要调用的方法及其参数  
+   * 同时 也用于存储从服务端返回的数据
+   */
   /** A call waiting for a value. */
   private class Call {
-    int id;                                       // call id
-    Writable param;                               // parameter
-    Writable value;                               // value, null if error
-    IOException error;                            // exception, null if value
-    boolean done;                                 // true when call is done
+    int id;                                       // call id  唯一标识
+    Writable param;                               // parameter  函数调用信息param
+    Writable value;                               // value, null if error  函数执行返回值
+    IOException error;                            // exception, null if value  出错或异常信息
+    boolean done;                                 // true when call is done 执行完成标识符
 
     protected Call(Writable param) {
       this.param = param;
@@ -195,10 +199,14 @@ public class Client {
      */
     public synchronized void setValue(Writable value) {
       this.value = value;
+      //唤醒等待线程
       callComplete();
     }
   }
 
+  /**
+   * 用于处理远程连接对象  继承Thread
+   */
   /** Thread that reads responses and notifies callers.  Each connection owns a
    * socket connected to a remote address.  Calls are multiplexed through this
    * socket: responses may be delivered out of order. */
@@ -430,6 +438,7 @@ public class Client {
       short timeoutFailures = 0;
       while (true) {
         try {
+        	//创建socket
           this.socket = socketFactory.createSocket();
           this.socket.setTcpNoDelay(tcpNoDelay);
           
@@ -454,6 +463,7 @@ public class Client {
           }
           
           // connection time out is 20s
+          // 设置连接超时为20s  
           NetUtils.connect(this.socket, server, 20000);
           if (rpcTimeout > 0) {
             pingInterval = rpcTimeout;  // rpcTimeout overwrites pingInterval
@@ -471,6 +481,9 @@ public class Client {
           /* The max number of retries is 45,
            * which amounts to 20s*45 = 15 minutes retries.
            */
+          /* 设置最多连接重试为45次。 
+           * 总共有20s*45 = 15 分钟的重试时间。 
+           */  
           handleConnectionFailure(timeoutFailures++, 45, toe);
         } catch (IOException ie) {
           if (updateAddress()) {
@@ -580,9 +593,9 @@ public class Client {
         final short maxRetries = 15;
         Random rand = null;
         while (true) {
-          setupConnection();
-          InputStream inStream = NetUtils.getInputStream(socket);
-          OutputStream outStream = NetUtils.getOutputStream(socket);
+          setupConnection();//建立连接
+          InputStream inStream = NetUtils.getInputStream(socket);//获得输入流  
+          OutputStream outStream = NetUtils.getOutputStream(socket);//获得输出流 
           writeRpcHeader(outStream);
           if (useSasl) {
             final InputStream in2 = inStream;
@@ -623,15 +636,17 @@ public class Client {
             }
           }
           this.in = new DataInputStream(new BufferedInputStream
-              (new PingInputStream(inStream)));
+              (new PingInputStream(inStream))); //将输入流装饰成DataInputStream  
           this.out = new DataOutputStream
-          (new BufferedOutputStream(outStream));
+          (new BufferedOutputStream(outStream));//将输出流装饰成DataOutputStream  
           writeHeader();
 
           // update last activity time
+          //更新活动时间
           touch();
 
           // start the receiver thread after the socket connection has been set up
+          //当连接建立时，启动接受线程等待服务端传回数据，注意：Connection继承了Thread  
           start();
           return;
         }
@@ -787,6 +802,7 @@ public class Client {
             + connections.size());
 
       while (waitForWork()) {//wait here for work - read or close connection
+    	//获取server端处理返回的结果
         receiveResponse();
       }
       
@@ -814,12 +830,15 @@ public class Client {
           
           //for serializing the
           //data to be written
+          //创建一个缓冲区 
           d = new DataOutputBuffer();
           d.writeInt(call.id);
           call.param.write(d);
           byte[] data = d.getData();
           int dataLength = d.getLength();
+          //首先写出数据的长度
           out.writeInt(dataLength);      //first put the data length
+          //向服务端写数据
           out.write(data, 0, dataLength);//write the data
           out.flush();
         }
@@ -842,19 +861,22 @@ public class Client {
       touch();
       
       try {
+    	// 阻塞读取id
         int id = in.readInt();                    // try to read an id
 
         if (LOG.isDebugEnabled())
           LOG.debug(getName() + " got value #" + id);
-
+        //在calls池中找到发送时的那个对象
         Call call = calls.get(id);
-
+        // 阻塞读取call对象的状态  
         int state = in.readInt();     // read call status
         if (state == Status.SUCCESS.state) {
           Writable value = ReflectionUtils.newInstance(valueClass, conf);
+          // 读取数据 
           value.readFields(in);                 // read value
+          //将读取到的值赋给call对象，同时唤醒Client等待线程
           call.setValue(value);
-          calls.remove(id);
+          calls.remove(id);//删除已处理的call 
         } else if (state == Status.ERROR.state) {
           call.setException(new RemoteException(WritableUtils.readString(in),
                                                 WritableUtils.readString(in)));
@@ -1089,15 +1111,17 @@ public class Client {
    * threw an exception. */
   public Writable call(Writable param, ConnectionId remoteId)  
                        throws InterruptedException, IOException {
-    Call call = new Call(param);
-    Connection connection = getConnection(remoteId, call);
-    connection.sendParam(call);                 // send the parameter
+    Call call = new Call(param);//将传入的数据 封装成call对象
+    Connection connection = getConnection(remoteId, call);//获得一个连接
+    connection.sendParam(call);                 // send the parameter  向服务端发送一个call对象
     boolean interrupted = false;
     synchronized (call) {
       while (!call.done) {
         try {
+        	//等待结果返回,在Call类中的callComplete()方法里有notify()方法用于唤醒线程
           call.wait();                           // wait for the result
         } catch (InterruptedException ie) {
+          //因异常而终止 设置interrupted标识位为true
           // save the fact that we were interrupted
           interrupted = true;
         }
@@ -1118,6 +1142,7 @@ public class Client {
           throw wrapException(connection.getRemoteAddress(), call.error);
         }
       } else {
+    	  //返回结果
         return call.value;
       }
     }
@@ -1223,7 +1248,7 @@ public class Client {
    private Connection getConnection(ConnectionId remoteId,
                                    Call call)
                                    throws IOException, InterruptedException {
-    if (!running.get()) {
+    if (!running.get()) {//如果客户端停止了
       // the client is stopped
       throw new IOException("The client is stopped");
     }
@@ -1233,6 +1258,8 @@ public class Client {
      * refs for keys in HashMap properly. For now its ok.
      */
     do {
+    	//如果connections连接池中有对应的连接对象，就不需重新创建了；如果没有就需重新创建一个连接对象。  
+    	///但请注意，该连接对象只是存储了remoteId的信息，其实还并没有和服务端建立连接。
       synchronized (connections) {
         connection = connections.get(remoteId);
         if (connection == null) {
@@ -1240,17 +1267,19 @@ public class Client {
           connections.put(remoteId, connection);
         }
       }
-    } while (!connection.addCall(call));
+    } while (!connection.addCall(call));//将call对象放入对应连接中的calls池 
     
     //we don't invoke the method below inside "synchronized (connections)"
     //block above. The reason for that is if the server happens to be slow,
     //it will take longer to establish a connection and that will slow the
     //entire system down.
+    //这里真正完成与服务端的连接
     connection.setupIOstreams();
     return connection;
   }
 
    /**
+    * 唯一确定一个连接
     * This class holds the address and the user ticket. The client connections
     * to servers are uniquely identified by <remoteAddress, protocol, ticket>
     */

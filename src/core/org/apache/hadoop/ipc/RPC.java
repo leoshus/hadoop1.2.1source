@@ -73,6 +73,9 @@ public class RPC {
   private RPC() {}                                  // no public ctor
 
 
+  /**
+   * 封装方法调用的方法名与方法参数
+   */
   /** A method invocation, including the method name and its parameters.*/
   private static class Invocation implements Writable, Configurable {
     private String methodName;
@@ -139,7 +142,12 @@ public class RPC {
     }
 
   }
-
+  
+/**
+ * 通过SocketFactory来缓存Client对象 以达到重用Client对象的目的
+ * @author Administrator
+ *
+ */
   /* Cache a client using its socket factory as the hash key */
   static private class ClientCache {
     private Map<SocketFactory, Client> clients =
@@ -204,6 +212,9 @@ public class RPC {
     return CLIENTS.getClient(conf);
   }
   
+  /**
+   * 动态代理中的调用实现类  
+   */
   private static class Invoker implements InvocationHandler {
     private Client.ConnectionId remoteId;
     private Client client;
@@ -530,6 +541,9 @@ public class RPC {
     return new Server(instance, conf, bindAddress, port, numHandlers, verbose, secretManager);
   }
   
+  /**
+   * ipc.Server实现类
+   */
   /** An RPC Server. */
   public static class Server extends org.apache.hadoop.ipc.Server {
     private Object instance;
